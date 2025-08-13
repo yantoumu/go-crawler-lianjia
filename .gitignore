@@ -2,3 +2,22 @@ debug
 /.idea
 /parser/douban
 go-crawler
+
+# 配置文件（包含敏感信息）
+config.yaml
+config.yml
+*.config.yaml
+*.config.yml
+
+# 但不忽略示例配置
+!config.example.yaml
+!config.example.yml
+
+# 二进制文件
+crawler
+*.exe
+*.test
+
+# 临时文件
+*.tmp
+*.log

@@ -17,6 +17,8 @@ type Config struct {
 	Password string
 	DBName   string
 	SSLMode  string
+	MaxOpen  int
+	MaxIdle  int
 }
 
 // DB 数据库连接封装
@@ -35,9 +37,19 @@ func NewDB(config Config) (*DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	
-	// 设置连接池参数
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
+	// 设置连接池参数（使用配置中的值）
+	if config.MaxOpen > 0 {
+		db.SetMaxOpenConns(config.MaxOpen)
+	} else {
+		db.SetMaxOpenConns(25)
+	}
+	
+	if config.MaxIdle > 0 {
+		db.SetMaxIdleConns(config.MaxIdle)
+	} else {
+		db.SetMaxIdleConns(5)
+	}
+	
 	db.SetConnMaxLifetime(5 * time.Minute)
 	
 	// 测试连接
