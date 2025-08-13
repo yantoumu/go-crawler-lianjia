@@ -31,37 +31,50 @@ psql -U postgres -d crawler < migrations/001_create_general_tables.sql
 
 ## 使用方法
 
-### 基本使用
+### 配置设置
 
+1. **复制配置文件模板**：
 ```bash
-# 简单爬取（不保存到数据库）
-go run main.go -url https://example.com
-
-# 使用PostgreSQL存储
-go run main.go -url https://example.com -use-postgres
-
-# 自定义配置
-go run main.go \
-  -url https://example.com \
-  -use-postgres \
-  -db-host localhost \
-  -db-port 5432 \
-  -db-user myuser \
-  -db-pass mypass \
-  -db-name crawler \
-  -workers 20
+cp config.example.yaml config.yaml
 ```
 
-### 命令行参数
+2. **编辑配置文件**，填入你的数据库信息：
+```yaml
+postgresql:
+  host: your-db-host
+  port: 5432
+  db: your-database
+  username: your-username
+  password: your-password
+```
 
-- `-url`: 爬取的起始URL（必需）
-- `-use-postgres`: 启用PostgreSQL存储
-- `-db-host`: PostgreSQL主机（默认: localhost）
-- `-db-port`: PostgreSQL端口（默认: 5432）
-- `-db-user`: PostgreSQL用户（默认: postgres）
-- `-db-pass`: PostgreSQL密码（默认: postgres）
-- `-db-name`: PostgreSQL数据库名（默认: crawler）
-- `-workers`: 并发工作线程数（默认: 10）
+3. **创建数据库表**：
+```bash
+psql -U your-username -d your-database < migrations/001_create_general_tables.sql
+```
+
+### 运行方式
+
+程序启动时会**自动初始化数据库连接**，无需手动指定：
+
+```bash
+# 直接运行（自动连接数据库）
+go run main.go
+
+# 指定要爬取的URL（通过环境变量）
+START_URL=https://example.com go run main.go
+
+# 使用不同的配置文件
+CRAWLER_CONFIG=myconfig.yaml go run main.go
+
+# 测试数据库连接
+go run cmd/test/main.go
+```
+
+### 环境变量
+
+- `CRAWLER_CONFIG`: 配置文件路径（默认: config.yaml）
+- `START_URL`: 要爬取的起始URL（可选）
 
 ## 自定义解析器
 
