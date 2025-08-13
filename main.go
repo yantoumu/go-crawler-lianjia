@@ -2,38 +2,112 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
-	"strconv"
-
+	"os"
+	"os/signal"
+	"syscall"
+	
 	"github.com/zzayne/go-crawler/engine"
-	parser "github.com/zzayne/go-crawler/parser/lianjia"
-	"github.com/zzayne/go-crawler/persist"
+	"github.com/zzayne/go-crawler/fetcher"
+	"github.com/zzayne/go-crawler/parser"
+	"github.com/zzayne/go-crawler/persist/postgres"
 	"github.com/zzayne/go-crawler/scheduler"
 )
 
+var (
+	// 命令行参数
+	startURL    = flag.String("url", "", "Starting URL for crawling")
+	dbHost      = flag.String("db-host", "localhost", "PostgreSQL host")
+	dbPort      = flag.Int("db-port", 5432, "PostgreSQL port")
+	dbUser      = flag.String("db-user", "postgres", "PostgreSQL user")
+	dbPassword  = flag.String("db-pass", "postgres", "PostgreSQL password")
+	dbName      = flag.String("db-name", "crawler", "PostgreSQL database name")
+	workerCount = flag.Int("workers", 10, "Number of concurrent workers")
+	usePostgres = flag.Bool("use-postgres", false, "Use PostgreSQL for storage")
+)
+
 func main() {
-	ctx := context.Background()
-	itemChan, err := persist.ItemSaver(ctx, "lianjia")
-	if err != nil {
-		log.Fatal(err)
+	flag.Parse()
+	
+	if *startURL == "" {
+		log.Fatal("Please provide a starting URL with -url flag")
 	}
-
+	
+	// 创建context用于优雅关闭
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	// 设置信号处理
+	setupSignalHandler(cancel)
+	
+	// 创建引擎
 	e := engine.Engine{
-		WorkerCount: 10,
 		Scheduler:   &scheduler.QueueScheduler{},
-		ItemChan:    itemChan,
+		WorkerCount: *workerCount,
 	}
-
-	var reqList []engine.Request
-
-	//链家的租房无明显入口，每页内容也无较好方法提取的下一页url，所以先手动提供120个分页入口来爬取内容
-	for i := 1; i <= 120; i++ {
-		req := engine.Request{
-			URL:       "https://sz.lianjia.com/zufang/pg" + strconv.Itoa(i),
-			ParseFunc: parser.RentListParser,
+	
+	// 如果启用PostgreSQL存储
+	if *usePostgres {
+		// 连接数据库
+		dbConfig := postgres.Config{
+			Host:     *dbHost,
+			Port:     *dbPort,
+			User:     *dbUser,
+			Password: *dbPassword,
+			DBName:   *dbName,
+			SSLMode:  "disable",
 		}
-		reqList = append(reqList, req)
+		
+		db, err := postgres.NewDB(dbConfig)
+		if err != nil {
+			log.Fatalf("Failed to connect to database: %v", err)
+		}
+		defer db.Close()
+		
+		// 创建ItemSaver
+		itemChan, err := postgres.ItemSaver(ctx, db)
+		if err != nil {
+			log.Fatalf("Failed to create item saver: %v", err)
+		}
+		e.ItemChan = itemChan
 	}
-
-	e.Run(reqList...)
+	
+	// 创建通用解析器示例
+	// 这里可以根据需要配置不同的解析器
+	itemParser := &parser.ItemParser{
+		TitleSelector:   "h1",
+		ContentSelector: "p",
+		LinkSelector:    "a[href]",
+		AttributeSelectors: map[string]string{
+			"author": ".author",
+			"date":   ".date",
+		},
+	}
+	
+	// 启动爬虫
+	log.Printf("Starting crawler with URL: %s", *startURL)
+	e.Run(engine.Request{
+		URL:       *startURL,
+		ParseFunc: itemParser.Parse,
+	})
 }
+
+// setupSignalHandler 设置信号处理器
+func setupSignalHandler(cancel context.CancelFunc) {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	
+	go func() {
+		<-sigChan
+		log.Println("Received shutdown signal, gracefully stopping...")
+		cancel()
+		
+		// 清理资源
+		fetcher.Cleanup()
+	}()
+}
+
+// Example usage:
+// go run main.go -url https://example.com -use-postgres -workers 5
+// go run main.go -url https://example.com -use-postgres -db-host localhost -db-user myuser -db-pass mypass

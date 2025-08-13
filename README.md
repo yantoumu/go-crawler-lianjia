@@ -1,52 +1,149 @@
-# go-crawler 并发式网站爬虫
+# Go通用爬虫框架
 
-## 2022-04-09 更新
+一个高性能、可扩展的Go语言爬虫框架，支持PostgreSQL存储和自定义解析器。
 
-最近整理 repo 时，发现这个项目还有人 star，作为当初的练手项目，现在来看这个项目还是很不成熟。先升级到 go mod，有空再尝试整理维护。
+## 特性
 
-## 介绍
+- ✅ 高并发爬取
+- ✅ PostgreSQL数据存储
+- ✅ 灵活的解析器配置
+- ✅ 优雅关闭机制
+- ✅ 内存安全（无goroutine泄漏）
+- ✅ 可配置的工作线程数
+- ✅ 支持自定义CSS选择器
 
-作为并发编程练手项目，这个Repo是在慕课网学完[Google 资深工程师深度讲解 Go 语言](https://coding.imooc.com/class/180.html)后（个人觉得课程很不错，适合有语法基础的初学者进一步学习），自己尝试实践完成的爬虫实战练习。
+## 安装
 
-## 目的
+```bash
+# 克隆项目
+git clone https://github.com/yourusername/go-crawler.git
+cd go-crawler
 
-完成一个通用的爬虫基础框架，熟悉golang并发编程的基础，逐步深入golang分布式开发学习。
+# 安装依赖
+go mod tidy
 
+# 创建PostgreSQL数据库
+createdb crawler
 
-## 思路
+# 执行数据库迁移
+psql -U postgres -d crawler < migrations/001_create_general_tables.sql
+```
 
-原课程讲解了一个分布式的爬虫项目实践过程，十分有参考价值。所以本项目的实现也大体参照该课程的结构，有以下关键组成：
+## 使用方法
 
-- [x] Engine，爬虫任务下发和结果处理
-- [x] Scheduler，任务队列调度管理
-- [x] Fetcher, 获取请求路径的html内容
-- [x] Model，保存内容的实体
-- [x] Parser，fetcher得到html解析器，解析后返回数据和下一步请求信息。
-- [x] Persist，爬取信息保存实现
+### 基本使用
 
-除了使用`Parser`模块来处理特定页面的信息解析规则外，其他模块都是抽象的通用模块，所以如果想爬取其他网站，只需要在`Parser`里添加新的解析规则，其他的模块处理逻辑不变。
+```bash
+# 简单爬取（不保存到数据库）
+go run main.go -url https://example.com
 
+# 使用PostgreSQL存储
+go run main.go -url https://example.com -use-postgres
 
-## 依赖
+# 自定义配置
+go run main.go \
+  -url https://example.com \
+  -use-postgres \
+  -db-host localhost \
+  -db-port 5432 \
+  -db-user myuser \
+  -db-pass mypass \
+  -db-name crawler \
+  -workers 20
+```
 
-该项目依赖以下组件和软件
+### 命令行参数
 
-- [github.com/PuerkitoBio/goquery](github.com/PuerkitoBio/goquery),提供类似`jquery`的`dom`元素选择方法，提高爬取内容的解析效率，相比原课程的正则匹配来提取内容，这种实现更加清晰优雅
-- [gopkg.in/olivere/elastic.v5](https://gopkg.in/olivere/elastic.v5),`Elasticsearch`是一个分布式 RESTful 搜索和分析引擎,因为个人理解不深，不做过多介绍，项目里是做爬取结果内容存储和提供RESTful接口读取使用
-- docker，这个不用多说，这里暂时用作运行`Elasticsearch`，相关命令`docker run -d -p 9200:9200  elasticsearch`
+- `-url`: 爬取的起始URL（必需）
+- `-use-postgres`: 启用PostgreSQL存储
+- `-db-host`: PostgreSQL主机（默认: localhost）
+- `-db-port`: PostgreSQL端口（默认: 5432）
+- `-db-user`: PostgreSQL用户（默认: postgres）
+- `-db-pass`: PostgreSQL密码（默认: postgres）
+- `-db-name`: PostgreSQL数据库名（默认: crawler）
+- `-workers`: 并发工作线程数（默认: 10）
 
+## 自定义解析器
 
-## 使用
+创建自定义解析器来适配不同的网站：
 
-暂时以爬取链家深圳租房信息为例，进行项目开发和调试，后期可根据实际需求来添加应对目标网站反爬虫的机制，或者提高爬取速度的分布式开发。
+```go
+// 创建自定义解析器
+itemParser := &parser.ItemParser{
+    TitleSelector:   "h1.title",
+    ContentSelector: "div.content",
+    LinkSelector:    "a.next-page",
+    AttributeSelectors: map[string]string{
+        "author": "span.author",
+        "date":   "time.published",
+        "tags":   "div.tags",
+    },
+}
 
-在`$GOPATH/src/github.com/zzayne`下存放该项目，可运行查看结果输出。如果`Elasticsearch`运行在`9200`默认端口，可`GET`请求`http://localhost:9200/house_info/rent/_search?`后得到json数据。
+// 使用解析器
+e.Run(engine.Request{
+    URL:       "https://example.com",
+    ParseFunc: itemParser.Parse,
+})
+```
 
-![image](https://note.youdao.com/yws/public/resource/d4aea1ddaafd92526a8e7ff70a3586ab/xmlnote/07B258CB79AB4E8A8EC854B4479F8EB0/4129)
+## 数据库结构
 
+### crawled_items表
+- `id`: 主键
+- `url`: 页面URL（唯一）
+- `type`: 数据类型
+- `title`: 标题
+- `content`: 内容
+- `attributes`: JSON格式的额外属性
+- `crawled_at`: 爬取时间
+- `updated_at`: 更新时间
 
-## 其他
+## 架构设计
 
-本项目仅为学习实践项目，他用产生一切后果与本人无关。我的邮箱：thezhangwen@outlook.com，欢迎一起交流学习。
+```
+┌─────────────┐
+│   Engine    │ ← 核心调度引擎
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│  Scheduler  │ ← 任务调度器
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   Fetcher   │ ← 页面获取器
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   Parser    │ ← 内容解析器
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│  PostgreSQL │ ← 数据存储
+└─────────────┘
+```
 
+## 性能优化
 
+- 使用连接池管理数据库连接
+- 实现了优雅关闭机制
+- 修复了所有goroutine泄漏问题
+- 支持并发控制和速率限制
+
+## 开发
+
+```bash
+# 运行测试
+go test ./...
+
+# 构建二进制文件
+go build -o crawler
+
+# 检测数据竞争
+go build -race -o crawler
+./crawler -url https://example.com
+```
+
+## License
+
+MIT

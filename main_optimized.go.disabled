@@ -1,0 +1,189 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"runtime"
+	"runtime/pprof"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/zzayne/go-crawler/engine"
+	parser "github.com/zzayne/go-crawler/parser/lianjia"
+	"github.com/zzayne/go-crawler/persist"
+	"github.com/zzayne/go-crawler/scheduler"
+)
+
+// Configuration flags
+var (
+	workerCount   = flag.Int("workers", runtime.NumCPU()*2, "Number of concurrent workers")
+	maxPages      = flag.Int("pages", 120, "Maximum number of pages to crawl")
+	batchSize     = flag.Int("batch", 100, "Elasticsearch batch size")
+	cpuProfile    = flag.String("cpuprofile", "", "Write CPU profile to file")
+	memProfile    = flag.String("memprofile", "", "Write memory profile to file")
+	maxQueueSize  = flag.Int("queue", 10000, "Maximum queue size")
+	enableMetrics = flag.Bool("metrics", true, "Enable performance metrics")
+)
+
+func main() {
+	flag.Parse()
+
+	// Setup CPU profiling if requested
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			log.Fatal("Could not create CPU profile: ", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("Could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
+	// Set GOMAXPROCS for optimal CPU utilization
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	// Initialize optimized components
+	log.Println("Initializing crawler with optimizations...")
+	log.Printf("Workers: %d, Max Pages: %d, Batch Size: %d", *workerCount, *maxPages, *batchSize)
+
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initialize optimized saver
+	saver, err := persist.NewOptimizedSaver("lianjia", *batchSize)
+	if err != nil {
+		log.Fatal("Failed to initialize saver: ", err)
+	}
+	itemChan := saver.Start()
+
+	// Initialize optimized scheduler
+	scheduler := scheduler.NewOptimizedQueueScheduler(*maxQueueSize)
+
+	// Initialize optimized engine
+	e := engine.NewOptimizedEngine(scheduler, *workerCount)
+	e.ItemChan = itemChan
+
+	// Generate initial requests
+	reqList := generateRequests(*maxPages)
+
+	// Setup graceful shutdown
+	setupGracefulShutdown(ctx, cancel, e, saver)
+
+	// Start crawler with metrics
+	if *enableMetrics {
+		go reportSystemMetrics(ctx)
+	}
+
+	log.Printf("Starting crawler with %d initial requests...", len(reqList))
+	startTime := time.Now()
+
+	// Run the optimized engine
+	e.RunOptimized(reqList...)
+
+	// Wait for shutdown signal
+	<-ctx.Done()
+
+	log.Printf("Crawling completed in %v", time.Since(startTime))
+
+	// Write memory profile if requested
+	if *memProfile != "" {
+		writeMemProfile(*memProfile)
+	}
+}
+
+// generateRequests creates the initial request list
+func generateRequests(maxPages int) []engine.Request {
+	reqList := make([]engine.Request, 0, maxPages)
+
+	for i := 1; i <= maxPages; i++ {
+		req := engine.Request{
+			URL:       fmt.Sprintf("https://sz.lianjia.com/zufang/pg%d", i),
+			ParseFunc: parser.OptimizedRentListParser,
+		}
+		reqList = append(reqList, req)
+	}
+
+	return reqList
+}
+
+// setupGracefulShutdown handles shutdown signals
+func setupGracefulShutdown(ctx context.Context, cancel context.CancelFunc, e *engine.OptimizedEngine, s *persist.OptimizedSaver) {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		log.Println("Received shutdown signal, gracefully stopping...")
+
+		// Cancel context to signal shutdown
+		cancel()
+
+		// Give components time to shutdown gracefully
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+
+		// Shutdown components
+		done := make(chan struct{})
+		go func() {
+			e.Shutdown()
+			s.Shutdown()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			log.Println("Graceful shutdown completed")
+		case <-shutdownCtx.Done():
+			log.Println("Shutdown timeout exceeded, forcing exit")
+		}
+
+		os.Exit(0)
+	}()
+}
+
+// reportSystemMetrics periodically reports system metrics
+func reportSystemMetrics(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+
+			log.Printf("System Metrics: Goroutines=%d, Alloc=%dMB, TotalAlloc=%dMB, Sys=%dMB, NumGC=%d",
+				runtime.NumGoroutine(),
+				m.Alloc/1024/1024,
+				m.TotalAlloc/1024/1024,
+				m.Sys/1024/1024,
+				m.NumGC)
+		}
+	}
+}
+
+// writeMemProfile writes memory profile to file
+func writeMemProfile(filename string) {
+	f, err := os.Create(filename)
+	if err != nil {
+		log.Fatal("Could not create memory profile: ", err)
+	}
+	defer f.Close()
+
+	runtime.GC() // Get up-to-date statistics
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		log.Fatal("Could not write memory profile: ", err)
+	}
+
+	log.Printf("Memory profile written to %s", filename)
+}
