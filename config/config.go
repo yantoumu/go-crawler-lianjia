@@ -11,9 +11,10 @@ import (
 
 // Config 全局配置结构
 type Config struct {
-	PostgreSQL PostgreSQLConfig `yaml:"postgresql"`
-	Redis      RedisConfig      `yaml:"redis"`
-	Crawler    CrawlerConfig    `yaml:"crawler"`
+	PostgreSQL     PostgreSQLConfig     `yaml:"postgresql"`
+	Redis          RedisConfig          `yaml:"redis"`
+	Crawler        CrawlerConfig        `yaml:"crawler"`
+	DomainProcessor DomainProcessorConfig `yaml:"domainProcessor"`
 }
 
 // PostgreSQLConfig PostgreSQL数据库配置
@@ -43,6 +44,16 @@ type CrawlerConfig struct {
 	RequestTimeout int    `yaml:"requestTimeout"`
 	RateLimit      int    `yaml:"rateLimit"`
 	UserAgent      string `yaml:"userAgent"`
+}
+
+// DomainProcessorConfig 域名处理器配置
+type DomainProcessorConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	BatchSize    int      `yaml:"batchSize"`
+	WorkerCount  int      `yaml:"workerCount"`
+	PollInterval int      `yaml:"pollInterval"`    // 轮询间隔，秒
+	RateLimit    int      `yaml:"rateLimit"`       // 请求间隔，毫秒
+	APIEndpoints []string `yaml:"apiEndpoints"`    // WHOIS API端点
 }
 
 var globalConfig *Config
@@ -115,6 +126,27 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Crawler.UserAgent == "" {
 		cfg.Crawler.UserAgent = "Go-Crawler/1.0"
+	}
+	
+	// DomainProcessor默认值
+	if cfg.DomainProcessor.BatchSize == 0 {
+		cfg.DomainProcessor.BatchSize = 10
+	}
+	if cfg.DomainProcessor.WorkerCount == 0 {
+		cfg.DomainProcessor.WorkerCount = 3
+	}
+	if cfg.DomainProcessor.PollInterval == 0 {
+		cfg.DomainProcessor.PollInterval = 30 // 30 seconds
+	}
+	if cfg.DomainProcessor.RateLimit == 0 {
+		cfg.DomainProcessor.RateLimit = 200 // 200ms between requests
+	}
+	if len(cfg.DomainProcessor.APIEndpoints) == 0 {
+		cfg.DomainProcessor.APIEndpoints = []string{
+			"https://domain.seo9.org/query",
+			"https://whois.seokey.vip/query",
+			"https://whois-rdap-worker.gamesvchost.workers.dev/query",
+		}
 	}
 }
 

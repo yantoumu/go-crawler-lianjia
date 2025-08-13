@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 	
 	"github.com/zzayne/go-crawler/config"
 	"github.com/zzayne/go-crawler/engine"
@@ -14,12 +16,14 @@ import (
 	"github.com/zzayne/go-crawler/persist/postgres"
 	redisCache "github.com/zzayne/go-crawler/persist/redis"
 	"github.com/zzayne/go-crawler/scheduler"
+	"github.com/zzayne/go-crawler/service/domain"
 )
 
 var (
 	// 全局数据库连接
-	db    *postgres.DB
-	cache *redisCache.Cache
+	db              *postgres.DB
+	cache           *redisCache.Cache
+	domainProcessor *domain.DomainProcessor
 )
 
 func init() {
@@ -42,7 +46,12 @@ func init() {
 		initRedis(cfg)
 	}
 	
-	log.Println("✅ Database connections initialized successfully")
+	// 自动初始化域名处理器（如果启用了）
+	if cfg.DomainProcessor.Enabled {
+		initDomainProcessor(cfg)
+	}
+	
+	log.Println("✅ All services initialized successfully")
 }
 
 func initPostgreSQL(cfg *config.Config) {
@@ -77,9 +86,38 @@ func initRedis(cfg *config.Config) {
 	}
 }
 
+func initDomainProcessor(cfg *config.Config) {
+	if db == nil {
+		log.Printf("Warning: Cannot initialize domain processor without database connection")
+		return
+	}
+	
+	// 创建处理器配置
+	processorConfig := domain.ProcessorConfig{
+		BatchSize:    cfg.DomainProcessor.BatchSize,
+		WorkerCount:  cfg.DomainProcessor.WorkerCount,
+		PollInterval: time.Duration(cfg.DomainProcessor.PollInterval) * time.Second,
+		RateLimit:    time.Duration(cfg.DomainProcessor.RateLimit) * time.Millisecond,
+	}
+	
+	// 创建域名处理器
+	domainProcessor = domain.NewDomainProcessor(db, processorConfig)
+	
+	log.Printf("Domain processor initialized: batch=%d, workers=%d, poll=%ds", 
+		processorConfig.BatchSize, processorConfig.WorkerCount, cfg.DomainProcessor.PollInterval)
+}
+
 func main() {
-	// 确保程序退出时关闭数据库连接
+	// 确保程序退出时关闭所有服务
 	defer func() {
+		// 先停止域名处理器
+		if domainProcessor != nil {
+			if err := domainProcessor.Stop(); err != nil {
+				log.Printf("Error stopping domain processor: %v", err)
+			}
+		}
+		
+		// 再关闭数据库连接
 		if db != nil {
 			db.Close()
 			log.Println("PostgreSQL connection closed")
@@ -99,6 +137,15 @@ func main() {
 	
 	// 获取配置
 	cfg := config.Get()
+	
+	// 启动域名处理器（如果启用了）
+	if domainProcessor != nil {
+		if err := domainProcessor.Start(); err != nil {
+			log.Printf("Warning: Failed to start domain processor: %v", err)
+		} else {
+			log.Printf("✅ Domain processor started successfully")
+		}
+	}
 	
 	// 示例：启动一个简单的爬虫任务
 	runCrawler(ctx, cfg)
@@ -217,4 +264,39 @@ func GetDB() *postgres.DB {
 // GetCache 获取Redis缓存（供其他包使用）
 func GetCache() *redisCache.Cache {
 	return cache
+}
+
+// GetDomainProcessor 获取域名处理器（供其他包使用）
+func GetDomainProcessor() *domain.DomainProcessor {
+	return domainProcessor
+}
+
+// GetDomainProcessorStats 获取域名处理器统计信息
+func GetDomainProcessorStats() (*domain.ProcessorStats, error) {
+	if domainProcessor == nil {
+		return nil, fmt.Errorf("domain processor not initialized")
+	}
+	return domainProcessor.GetStats()
+}
+
+// RestartDomainProcessor 重启域名处理器
+func RestartDomainProcessor() error {
+	if domainProcessor == nil {
+		return fmt.Errorf("domain processor not initialized")
+	}
+	
+	log.Printf("Restarting domain processor...")
+	
+	// 停止处理器
+	if err := domainProcessor.Stop(); err != nil {
+		return fmt.Errorf("failed to stop domain processor: %w", err)
+	}
+	
+	// 重新启动
+	if err := domainProcessor.Start(); err != nil {
+		return fmt.Errorf("failed to start domain processor: %w", err)
+	}
+	
+	log.Printf("Domain processor restarted successfully")
+	return nil
 }
