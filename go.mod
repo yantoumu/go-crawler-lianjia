@@ -1,9 +1,12 @@
 module github.com/zzayne/go-crawler
 
-go 1.18
+go 1.23.0
+
+toolchain go1.24.2
 
 require (
 	github.com/PuerkitoBio/goquery v1.8.0
+	golang.org/x/time v0.12.0
 	gopkg.in/olivere/elastic.v5 v5.0.86
 )
 

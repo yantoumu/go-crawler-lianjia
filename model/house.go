@@ -1,6 +1,6 @@
 package model
 
-//House ...
+// House ...
 type House struct {
 	//编码
 	Code string

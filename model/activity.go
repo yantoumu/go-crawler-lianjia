@@ -1,6 +1,6 @@
 package model
 
-//Activity ...
+// Activity ...
 type Activity struct {
 	URL      string
 	Name     string

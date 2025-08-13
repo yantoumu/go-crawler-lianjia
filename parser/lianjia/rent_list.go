@@ -5,7 +5,7 @@ import (
 	"github.com/zzayne/go-crawler/engine"
 )
 
-//RentListParser ...
+// RentListParser ...
 func RentListParser(doc *goquery.Document) (engine.ParseResult, error) {
 	var result engine.ParseResult
 	var URL string
